@@ -79,7 +79,7 @@ def scroll_all(page, step=None, pause=None, max_iter=None):
 def click_tab(page, text):
     """
     Clica em uma aba específica baseada no texto.
-    
+    Garante que a aba está visível e estável antes de clicar.
     Args:
         page: Página do Playwright
         text: Texto da aba a ser clicada
@@ -87,8 +87,14 @@ def click_tab(page, text):
     tabs = page.locator(SEL["tab"])
     for i in range(tabs.count()):
         t = tabs.nth(i)
-        if text in t.inner_text():
-            t.click(timeout=2000)
+        try:
+            if text in t.inner_text():
+                t.scroll_into_view_if_needed()
+                time.sleep(0.5)  # Pequeno delay para garantir estabilidade
+                t.click(timeout=8000)
+                return
+        except Exception as e:
+            log_message(f"Aviso: Falha ao clicar na aba '{text}' (index {i}): {e}", "WARNING")
 
 def extract_nodes(page, gabarito_map):
     """
@@ -292,167 +298,159 @@ def main():
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
                 })
 
-            # Faz login com debugging melhorado
-            log_message("🔐 INICIANDO PROCESSO DE LOGIN", "INFO")
-            log_message(f"📧 Email configurado: {email[:3]}***@{email.split('@')[1] if '@' in email else 'erro'}", "INFO")
             try:
-                # Navega para a página com wait for network idle para garantir JavaScript carregado
-                log_message("🌐 Navegando para página de login do QConcursos...", "INFO")
-                page.goto(LOGIN_URL, wait_until="networkidle")
-                
-                # Debug: inspeciona a página inicial
-                if DEBUG_CONFIG["verbose_logging"]:
-                    debug_page_elements(page, "Após carregamento inicial da página de login")
-                
-                # Aguarda especificamente pelo formulário de login ser visível
-                log_message("⏳ Aguardando formulário de login carregar...", "INFO")
+                # === NOVO LOGIN PADRONIZADO ===
+                log_message("1. Navegando para a página de login...", "INFO")
+                page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+
+                log_message("2. Aguardando formulário de login...", "INFO")
                 try:
                     page.wait_for_selector("#login_form", state="visible", timeout=15000)
-                    log_message("✅ FORMULÁRIO DE LOGIN ENCONTRADO!", "SUCCESS")
+                    log_message("✓ Formulário de login encontrado!", "SUCCESS")
                 except Exception as form_error:
-                    log_message(f"⚠️ Aguardando formulário: {form_error}", "WARNING")
-                
-                # Aguarda um pouco extra para garantir que todo JavaScript terminou
-                log_message("Aguardando JavaScript carregar completamente...")
+                    log_message(f"✗ Erro ao aguardar formulário: {form_error}", "WARNING")
+
+                log_message("3. Aguardando JavaScript carregar completamente...", "INFO")
                 time.sleep(3)
-                
-                # Tenta aguardar pelo campo de email ser interativo
+                if DEBUG_CONFIG["verbose_logging"]:
+                    debug_page_elements(page, "Página de login carregada")
+
+                log_message("4. Tentando aguardar pelo campo de email...", "INFO")
                 try:
                     page.wait_for_selector(SEL["email"], state="visible", timeout=10000)
-                    # Verifica se o elemento está realmente interativo
                     email_element = page.locator(SEL["email"])
                     if email_element.is_enabled():
-                        log_message("Campo de email encontrado e habilitado!", "SUCCESS")
+                        log_message("✓ Campo de email encontrado e habilitado!", "SUCCESS")
                     else:
-                        log_message("Campo de email encontrado mas não está habilitado", "WARNING")
-                        time.sleep(2)  # Aguarda mais um pouco
+                        log_message("⚠️ Campo de email encontrado mas não está habilitado", "WARNING")
+                        time.sleep(2)
                 except Exception as wait_error:
-                    log_message(f"Erro ao aguardar campo de email: {wait_error}", "ERROR")
+                    log_message(f"✗ Erro ao aguardar campo de email: {wait_error}", "ERROR")
                     if DEBUG_CONFIG["verbose_logging"]:
                         debug_page_elements(page, "Após timeout aguardando campo de email")
-                
-                # Tenta preencher os campos com delays mais humanos
+
+                log_message("5. Tentando preencher email...", "INFO")
                 try:
-                    log_message("📧 Preenchendo campo de email...", "INFO")
-                    # Clica no campo primeiro para garantir que está focado
                     page.click(SEL["email"], timeout=10000)
-                    time.sleep(0.5)  # Pequena pausa humana
+                    time.sleep(0.5)
                     page.fill(SEL["email"], email, timeout=15000)
-                    log_message("✅ EMAIL PREENCHIDO COM SUCESSO!", "SUCCESS")
+                    log_message("✓ Email preenchido com sucesso!", "SUCCESS")
                 except Exception as email_error:
-                    log_message(f"Erro ao preencher email: {email_error}", "ERROR")
-                    
-                    # Tenta seletores alternativos para email
-                    alternative_email_selectors = [
-                        'input[name="user[email]"]',  # Seletor baseado no name do HTML
+                    log_message(f"✗ Erro ao preencher email: {email_error}", "ERROR")
+                    alternative_selectors = [
+                        'input[name="user[email]"]',
                         'input[type="text"][placeholder*="E-mail"]',
                         'input[type="email"]',
                         'input[name="email"]',
                         'input[name="login"]',
-                        'input[placeholder*="email"]',
-                        'input[placeholder*="Email"]'
+                        'input[placeholder*="email" i]',
+                        'input[placeholder*="E-mail" i]'
                     ]
-                    
                     email_filled = False
-                    for alt_selector in alternative_email_selectors:
+                    for alt_selector in alternative_selectors:
                         try:
                             if page.locator(alt_selector).count() > 0:
                                 page.click(alt_selector, timeout=5000)
                                 time.sleep(0.5)
                                 page.fill(alt_selector, email, timeout=5000)
-                                log_message(f"Email preenchido usando seletor alternativo: {alt_selector}", "SUCCESS")
+                                log_message(f"✓ Email preenchido usando seletor alternativo: {alt_selector}", "SUCCESS")
                                 email_filled = True
                                 break
                         except Exception:
                             continue
-                    
                     if not email_filled:
-                        raise Exception("Não foi possível preencher o campo de email com nenhum seletor")
-                
+                        raise Exception("Não foi possível preencher o campo de email")
+
+                log_message("6. Tentando preencher senha...", "INFO")
                 try:
-                    log_message("🔐 Preenchendo campo de senha...", "INFO")
-                    # Clica no campo primeiro para garantir que está focado
                     page.click(SEL["password"], timeout=10000)
-                    time.sleep(0.5)  # Pequena pausa humana
+                    time.sleep(0.5)
                     page.fill(SEL["password"], password, timeout=15000)
-                    log_message("✅ SENHA PREENCHIDA COM SUCESSO!", "SUCCESS")
+                    log_message("✓ Senha preenchida com sucesso!", "SUCCESS")
                 except Exception as password_error:
-                    log_message(f"Erro ao preencher senha: {password_error}", "ERROR")
-                    
-                    # Tenta seletores alternativos para senha
-                    alternative_password_selectors = [
-                        'input[name="user[password]"]',  # Seletor baseado no name do HTML
+                    log_message(f"✗ Erro ao preencher senha: {password_error}", "ERROR")
+                    alternative_selectors = [
+                        'input[name="user[password]"]',
                         'input[type="password"]',
                         'input[name="password"]',
                         'input[name="senha"]'
                     ]
-                    
                     password_filled = False
-                    for alt_selector in alternative_password_selectors:
+                    for alt_selector in alternative_selectors:
                         try:
                             if page.locator(alt_selector).count() > 0:
                                 page.click(alt_selector, timeout=5000)
                                 time.sleep(0.5)
                                 page.fill(alt_selector, password, timeout=5000)
-                                log_message(f"Senha preenchida usando seletor alternativo: {alt_selector}", "SUCCESS")
+                                log_message(f"✓ Senha preenchida usando seletor alternativo: {alt_selector}", "SUCCESS")
                                 password_filled = True
                                 break
                         except Exception:
                             continue
-                    
                     if not password_filled:
-                        raise Exception("Não foi possível preencher o campo de senha com nenhum seletor")
-                
-                # Debug: inspeciona a página após preencher os campos
+                        raise Exception("Não foi possível preencher o campo de senha")
+
                 if DEBUG_CONFIG["verbose_logging"]:
-                    debug_page_elements(page, "Após preencher email e senha")
-                
-                # Pausa humana antes de submeter
-                log_message("⏳ Aguardando momento ideal para submeter login...", "INFO")
+                    debug_page_elements(page, "Após preencher credenciais")
+
+                log_message("7. Aguardando um momento antes de submeter...", "INFO")
                 time.sleep(2)
-                
+
+                log_message("8. Tentando clicar no botão de login...", "INFO")
                 try:
-                    log_message("🚀 CLICANDO NO BOTÃO DE LOGIN...", "INFO")
                     page.click(SEL["submit"], timeout=10000)
-                    log_message("✅ BOTÃO DE LOGIN CLICADO - AGUARDANDO RESPOSTA...", "SUCCESS")
+                    log_message("✓ Botão de login clicado!", "SUCCESS")
                 except Exception as submit_error:
-                    log_message(f"Erro ao clicar no botão de submit: {submit_error}", "ERROR")
-                    
-                    # Tenta seletores alternativos para o botão
-                    alternative_submit_selectors = [
-                        'input[type="submit"][value="Entrar"]',  # Seletor específico baseado no HTML
+                    log_message(f"✗ Erro ao clicar no botão: {submit_error}", "ERROR")
+                    alternative_selectors = [
+                        'input[type="submit"][value="Entrar"]',
                         'button[type="submit"]',
                         'input[type="submit"]',
                         'button:has-text("Entrar")',
                         'button:has-text("Login")',
                         'button:has-text("Acessar")'
                     ]
-                    
                     submit_clicked = False
-                    for alt_selector in alternative_submit_selectors:
+                    for alt_selector in alternative_selectors:
                         try:
                             if page.locator(alt_selector).count() > 0:
                                 page.click(alt_selector, timeout=5000)
-                                log_message(f"Botão clicado usando seletor alternativo: {alt_selector}", "SUCCESS")
+                                log_message(f"✓ Botão clicado usando seletor alternativo: {alt_selector}", "SUCCESS")
                                 submit_clicked = True
                                 break
                         except Exception:
                             continue
-                    
                     if not submit_clicked:
-                        # Como último recurso, tenta pressionar Enter
                         try:
                             page.keyboard.press("Enter")
-                            log_message("Pressionado Enter como alternativa ao clique no botão", "SUCCESS")
+                            log_message("✓ Pressionado Enter como alternativa", "SUCCESS")
                         except Exception:
                             raise Exception("Não foi possível submeter o formulário de login")
-                
-                # Aguarda redirecionamento com timeout maior
-                log_message("⏳ Aguardando redirecionamento do QConcursos...", "INFO")
-                page.wait_for_url("**/app.qconcursos.com/**", timeout=SCRAPING_CONFIG["timeout"])
-                log_message("🎉 LOGIN REALIZADO COM SUCESSO! SESSÃO ATIVA!", "SUCCESS")
-                log_message(f"🔗 URL atual após login: {page.url}", "SUCCESS")
-                
+
+                log_message("9. Aguardando redirecionamento...", "INFO")
+                try:
+                    page.wait_for_url("**/app.qconcursos.com/**", timeout=60000)
+                    log_message("✓ Login realizado com sucesso!", "SUCCESS")
+                    log_message(f"URL final: {page.url}", "SUCCESS")
+                except Exception as redirect_error:
+                    log_message(f"✗ Erro no redirecionamento: {redirect_error}", "ERROR")
+                    log_message(f"URL atual: {page.url}", "ERROR")
+                    error_selectors = [
+                        '.alert-danger',
+                        '.error',
+                        '[class*="error"]',
+                        '[class*="alert"]'
+                    ]
+                    for error_sel in error_selectors:
+                        try:
+                            if page.locator(error_sel).count() > 0:
+                                error_text = page.locator(error_sel).first.inner_text()
+                                log_message(f"Mensagem de erro encontrada: {error_text}", "ERROR")
+                        except Exception:
+                            pass
+                    raise Exception("Falha no login - redirecionamento não ocorreu")
+                # === FIM DO NOVO LOGIN PADRONIZADO ===
+
             except Exception as login_error:
                 log_message(f"❌ FALHA NO LOGIN: {login_error}", "ERROR")
                 log_message("🔒 SESSÃO NÃO FOI ESTABELECIDA", "ERROR")

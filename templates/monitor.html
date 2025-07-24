@@ -307,6 +307,15 @@
             <p>Monitor de Scraping em Tempo Real</p>
         </div>
 
+        <!-- Adicione logo após o header -->
+        <div style="margin-bottom: 20px; text-align: center;">
+            <input type="text" id="scrape-url-input" placeholder="Informe a URL para raspagem" style="width: 350px; padding: 8px; border-radius: 5px; border: 1px solid #ccc;">
+            <button id="test-login-btn" style="padding: 8px 18px; border-radius: 5px; background: #28a745; color: white; border: none; margin-left: 10px; cursor: pointer;">
+                Testar Login
+            </button>
+            <div id="test-login-result" style="margin-top: 10px; color: #333;"></div>
+        </div>
+
         <div class="dashboard">
             <!-- Status Card -->
             <div class="card status-card">
@@ -323,6 +332,12 @@
                         <i class="icon fas fa-power-off" id="status-icon"></i>
                         <span class="value" id="status-text">Parado</span>
                         <div class="label">Status Geral</div>
+                    </div>
+                    
+                    <div class="status-item">
+                        <i class="icon fas fa-link" id="session-icon"></i>
+                        <span class="value" id="session-text">Sessão inativa</span>
+                        <div class="label">Sessão</div>
                     </div>
                     
                     <div class="status-item">
@@ -497,6 +512,21 @@
             }
         }
 
+        let sessionActive = false;
+        function updateSessionStatus(active) {
+            const sessionIcon = document.getElementById('session-icon');
+            const sessionText = document.getElementById('session-text');
+            if (active) {
+                sessionIcon.className = 'icon fas fa-link running';
+                sessionText.textContent = 'Sessão ativa';
+                sessionText.className = 'value running';
+            } else {
+                sessionIcon.className = 'icon fas fa-unlink stopped';
+                sessionText.textContent = 'Sessão inativa';
+                sessionText.className = 'value stopped';
+            }
+        }
+
         function updateLoginStatus(message, level) {
             const loginIcon = document.getElementById('login-icon');
             const loginText = document.getElementById('login-text');
@@ -509,22 +539,27 @@
                 loginIcon.className = 'icon fas fa-spinner fa-spin';
                 loginText.textContent = 'Tentando logar...';
                 loginItem.classList.add('login-attempting');
+                updateSessionStatus(false);
             } else if (message.includes('🎉 LOGIN REALIZADO COM SUCESSO')) {
                 loginIcon.className = 'icon fas fa-check-circle';
                 loginText.textContent = 'Logado com sucesso!';
                 loginItem.classList.add('login-success');
+                updateSessionStatus(true);
             } else if (message.includes('❌ FALHA NO LOGIN')) {
                 loginIcon.className = 'icon fas fa-times-circle';
                 loginText.textContent = 'Falha no login';
                 loginItem.classList.add('login-failed');
+                updateSessionStatus(false);
             } else if (message.includes('🔒 SESSÃO NÃO FOI ESTABELECIDA')) {
                 loginIcon.className = 'icon fas fa-exclamation-triangle';
                 loginText.textContent = 'Sem sessão';
                 loginItem.classList.add('login-failed');
+                updateSessionStatus(false);
             } else if (message.includes('🚀 INICIANDO PROCESSO DE RASPAGEM')) {
                 loginIcon.className = 'icon fas fa-check-circle';
                 loginText.textContent = 'Sessão ativa';
                 loginItem.classList.add('login-success');
+                updateSessionStatus(true);
             }
         }
 
@@ -583,6 +618,19 @@
                 });
             })
             .catch(error => console.error('Erro ao carregar logs:', error));
+
+        document.getElementById('test-login-btn').onclick = function() {
+            const url = document.getElementById('scrape-url-input').value;
+            fetch('/api/test_login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('test-login-result').innerText = data.result;
+            });
+        };
     </script>
 </body>
 </html> 

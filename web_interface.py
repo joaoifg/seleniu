@@ -128,6 +128,25 @@ def serve_screenshot(filename):
     screenshots_dir.mkdir(exist_ok=True)
     return send_from_directory(screenshots_dir, filename)
 
+@app.route('/api/test_login', methods=['POST'])
+def api_test_login():
+    data = request.get_json()
+    url = data.get('url', '')
+    import subprocess
+
+    # Passa a URL como argumento se fornecida
+    cmd = ['python', 'test_login.py']
+    if url:
+        cmd.append(url)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=60
+        )
+        return jsonify({'result': result.stdout})
+    except Exception as e:
+        return jsonify({'result': f'Erro: {str(e)}'})
+
 @socketio.on('connect')
 def handle_connect():
     """Quando um cliente se conecta via WebSocket."""
