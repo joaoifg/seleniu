@@ -1,0 +1,57 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: qc-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - qc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web-interface:
+    build: .
+    container_name: qc-web-interface
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+    volumes:
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+      - ./output:/app/output
+    networks:
+      - qc-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: gunicorn --config gunicorn_config.py web_interface:app
+    restart: unless-stopped
+
+  scraper:
+    build: .
+    container_name: qc-scraper
+    environment:
+      - QC_EMAIL=${QC_EMAIL}
+      - QC_PASSWORD=${QC_PASSWORD}
+    volumes:
+      - ./urls.txt:/app/urls.txt
+      - ./output:/app/output
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+    networks:
+      - qc-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      web-interface:
+        condition: service_started
+    command: python scraper.py
+    restart: "no"
+
+networks:
+  qc-network:
+    driver: bridge 

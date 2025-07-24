@@ -1,0 +1,30 @@
+# Arquivos de ambiente
+.env
+
+# Pasta de output
+output/
+
+# Logs
+*.log
+
+# Screenshots de debug
+debug.png
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db 
