@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
-from freeplane import build_freeplane
 from config import LOGIN_URL, SEL, SCRAPING_CONFIG, OUTPUT_CONFIG, DEBUG_CONFIG
 
 # Importar o handler da interface web se disponível
@@ -58,23 +57,21 @@ def scroll_all(page, step=None, pause=None, max_iter=None):
     step = step or SCRAPING_CONFIG["scroll_step"]
     pause = pause or SCRAPING_CONFIG["scroll_pause"]
     max_iter = max_iter or SCRAPING_CONFIG["scroll_max_iter"]
-    """
-    Rola a página para carregar todo o conteúdo dinâmico.
     
-    Args:
-        page: Página do Playwright
-        step: Quantidade de pixels para rolar a cada iteração
-        pause: Tempo de pausa entre rolagens
-        max_iter: Número máximo de iterações
-    """
+    log_message(f"🔄 Iniciando scroll da página (step={step}, pause={pause}s, max_iter={max_iter})")
     last = 0
-    for _ in range(max_iter):
+    for i in range(max_iter):
         page.evaluate(f"window.scrollBy(0,{step});")
         time.sleep(pause)
         h = page.evaluate("document.body.scrollHeight")
         if h == last:
+            log_message(f"✅ Scroll completo após {i+1} iterações (altura final: {h}px)")
             break
         last = h
+        if i % 10 == 0:  # Log a cada 10 iterações
+            log_message(f"   Scrolling... iteração {i+1}/{max_iter} (altura: {h}px)")
+    else:
+        log_message(f"⚠️ Scroll atingiu limite máximo de {max_iter} iterações")
 
 def click_tab(page, text):
     """
@@ -84,117 +81,187 @@ def click_tab(page, text):
         page: Página do Playwright
         text: Texto da aba a ser clicada
     """
-    tabs = page.locator(SEL["tab"])
-    for i in range(tabs.count()):
-        t = tabs.nth(i)
-        try:
-            if text in t.inner_text():
-                t.scroll_into_view_if_needed()
-                time.sleep(0.5)  # Pequeno delay para garantir estabilidade
-                t.click(timeout=8000)
-                return
-        except Exception as e:
-            log_message(f"Aviso: Falha ao clicar na aba '{text}' (index {i}): {e}", "WARNING")
-
-def extract_nodes(page, gabarito_map):
-    """
-    Extrai os dados dos cards de questões da página.
+    log_message(f"🎯 Procurando aba '{text}'...")
     
-    Args:
-        page: Página do Playwright
-        gabarito_map: Dicionário com gabaritos conhecidos
-        
-    Returns:
-        Lista de dicionários com os dados extraídos
+    # JavaScript para clicar na aba - baseado no bookmarklet
+    click_tab_js = f"""
+    (function() {{
+        let found = false;
+        document.querySelectorAll('.tab').forEach(tab => {{
+            if (tab.textContent.includes('{text}')) {{
+                tab.click();
+                found = true;
+                console.log('Clicou na aba: {text}');
+            }}
+        }});
+        return found;
+    }})();
     """
-    cards = page.locator(SEL["card"])
-    nodes = []
-
-    for i in range(cards.count()):
-        card = cards.nth(i)
-        
-        # Extrai número da questão
-        num = card.locator(SEL["num"]).inner_text().strip() if card.locator(SEL["num"]).count() else str(i+1)
-        gab = gabarito_map.get(num, "")
-
-        # Detecta automaticamente a correta via estatística
-        if gab == "":
-            if card.locator(SEL["statsAttr"]).count():
-                stats_raw = card.locator(SEL["statsAttr"]).get_attribute("data-question-statistics-alternatives-statistics")
-                if stats_raw:
-                    try:
-                        stats = json.loads(stats_raw)
-                        corr = next((s for s in stats if s.get("hit",0)>0), None)
-                        if corr:
-                            gab = corr.get("id","")
-                    except json.JSONDecodeError:
-                        pass
-
-        # Extrai título e informações
-        title = card.locator(SEL["title"]).inner_text().strip() if card.locator(SEL["title"]).count() else ""
-        info = card.locator(SEL["info"]).inner_text().strip().replace("\n"," ") if card.locator(SEL["info"]).count() else ""
-        if title in info:
-            info = info.replace(title,"").strip()
-
-        # Extrai enunciado
-        statement = card.locator(SEL["statement"]).inner_html().strip().replace("\n"," ") if card.locator(SEL["statement"]).count() else ""
-
-        # Extrai alternativas
-        alternatives_html = "".join([
-            card.locator(SEL["alt"]).nth(j).inner_html().strip()
-            for j in range(card.locator(SEL["alt"]).count())
-        ])
-
-        # Extrai comentários
-        comments_html = "".join([
-            card.locator(SEL["commentText"]).nth(j).inner_html().strip()
-            for j in range(card.locator(SEL["commentText"]).count())
-        ]) + alternatives_html
-
-        comments_html = comments_html.replace(
-            '<div class="question-commentary-text font-size-2">',
-            '<div class="question-commentary-text font-size-2"><p>------------</p>'
-        )
-
-        # Extrai comentário principal
-        comment_node = ""
-        if card.locator(SEL["commentText"]).count():
-            c = card.locator(SEL["commentText"]).first.inner_html().strip()
-            comment_node = f'<node MAX_WIDTH="40 cm"><richcontent TYPE="NODE"><html><head></head><body>{c}</body></html></richcontent></node>'
-
-        # Extrai badge
-        badge = card.locator(SEL["badge"]).first.inner_html().strip() if card.locator(SEL["badge"]).count() else ""
-
-        # Extrai informações extras
-        extra_html = "".join([
-            card.locator(SEL["extra"]).nth(j).inner_html().replace(
-                '<div class="text px-3 font-size-2 svelte-1tiqrp1">',
-                '<div class="text px-3 font-size-2 svelte-1tiqrp1">&#9830 '
-            )
-            for j in range(card.locator(SEL["extra"]).count())
-        ])
-
-        # Destaca questões com gabarito "E"
-        destaque = f' style="background-color:{OUTPUT_CONFIG["highlight_color"]};"' if gab == "E" and OUTPUT_CONFIG["highlight_wrong"] else ""
-        header = " | ".join(filter(None, [num, gab, title, info]))
-
-        # Constrói o HTML do nó
-        node_html = f"""
-<node MAX_WIDTH="40 cm">
-  <richcontent TYPE="NODE">
-    <html><head></head><body>
-      <span{destaque}>{header}</span><br>{statement}
-    </body></html>
-  </richcontent>
-  <richcontent TYPE="NOTE" CONTENT-TYPE="xml/">
-    <html><head></head><body>{comments_html} | {badge}</body></html>
-  </richcontent>
-  {f'<node><richcontent TYPE="NODE"><html><head></head><body>{extra_html}</body></html></richcontent></node>' if extra_html else ""}
-  {comment_node}
-</node>"""
-        nodes.append({"gab": gab, "html": node_html})
     
-    return nodes
+    try:
+        # Aguarda um pouco para garantir que as abas estão carregadas
+        time.sleep(1)
+        
+        result = page.evaluate(click_tab_js)
+        if result:
+            log_message(f"✅ Aba '{text}' clicada com sucesso!")
+            time.sleep(2)  # Aguarda o conteúdo da aba carregar
+        else:
+            log_message(f"⚠️ Aba '{text}' não encontrada")
+            
+        # Aguarda um pouco mais para estabilizar
+        time.sleep(1)
+        
+    except Exception as e:
+        log_message(f"❌ Erro ao clicar na aba '{text}': {e}", "ERROR")
+
+def extract_gabarito_automatico(page):
+    """
+    Extrai o gabarito automaticamente usando estatísticas - baseado no bookmarklet
+    """
+    log_message("🎯 Extraindo gabaritos automaticamente...")
+    
+    extract_gabarito_js = """
+    (function() {
+        let respostas = [];
+        document.querySelectorAll('.mb-4').forEach((questao, index) => {
+            try {
+                let el = questao.querySelector('[data-question-statistics-alternatives-statistics]');
+                if (!el) return;
+                let stats = JSON.parse(el.getAttribute('data-question-statistics-alternatives-statistics'));
+                let correctAnswer = stats.find(item => item.hit > 0);
+                                
+                let numeroQuestaoEl = questao.querySelector('.index.text-center.font-weight-bold.border-right.pr-2.svelte-1i1uol');
+                let numeroQuestao = numeroQuestaoEl ? numeroQuestaoEl.textContent.trim().replace(/\\n/g, '') : (index + 1);
+                                
+                if (correctAnswer) {
+                    let alternativa = correctAnswer.id;
+                    respostas.push(`${numeroQuestao}:${alternativa}`);
+                }
+            } catch (error) {
+                console.error('Erro ao processar questão:', error);
+            }
+        });
+        
+        if (respostas.length > 0) {
+            let resultado = respostas.join(', ');
+            console.log('Gabaritos extraídos:', resultado);
+            return resultado;
+        } else {
+            console.log('Nenhuma resposta encontrada!');
+            return '';
+        }
+    })();
+    """
+    
+    try:
+        resultado = page.evaluate(extract_gabarito_js)
+        if resultado:
+            log_message(f"✅ Gabaritos extraídos: {resultado[:100]}..." if len(resultado) > 100 else f"✅ Gabaritos extraídos: {resultado}")
+            
+            # Converte para dicionário
+            gabarito_map = {}
+            for item in resultado.split(', '):
+                if ':' in item:
+                    num, alt = item.split(':')
+                    gabarito_map[num.strip()] = alt.strip()
+            
+            return gabarito_map
+        else:
+            log_message("⚠️ Nenhum gabarito encontrado")
+            return {}
+    except Exception as e:
+        log_message(f"❌ Erro ao extrair gabaritos: {e}", "ERROR")
+        return {}
+
+def extract_all_data_with_javascript(page, gabarito_map=None):
+    """
+    Extrai todos os dados usando JavaScript - baseado no bookmarklet de extração completa
+    """
+    log_message("🔍 Iniciando extração completa de dados com JavaScript...")
+    
+    # Se não foi fornecido gabarito, tenta extrair automaticamente
+    if not gabarito_map:
+        gabarito_map = {}
+    
+    # Converte o gabarito_map para string JavaScript
+    gabarito_js = json.dumps(gabarito_map) if gabarito_map else "{}"
+    
+    extract_all_js = f"""
+    (function() {{
+        let m = {gabarito_js};
+        let p = document.querySelectorAll(".mb-4");
+        let nodes = [];
+        
+        p.forEach(e => {{
+            let t = e.querySelector(".index.text-center.font-weight-bold.border-right.pr-2.svelte-1i1uol");
+            t = t ? t.textContent.trim() : "";
+            let n = m[t] ? "" + m[t] : "";
+            
+            // Se não tem gabarito no mapa, tenta extrair da estatística
+            if (n === "") {{
+                try {{
+                    let statsEl = e.querySelector("[data-question-statistics-alternatives-statistics]");
+                    if (statsEl) {{
+                        let stats = JSON.parse(statsEl.getAttribute("data-question-statistics-alternatives-statistics"));
+                        let correctAnswer = stats.find(item => item.hit > 0);
+                        if (correctAnswer) {{
+                            n = correctAnswer.id;
+                        }}
+                    }}
+                }} catch (error) {{
+                    console.error('Erro ao extrair estatística:', error);
+                }}
+            }}
+            
+            let o = e.querySelector(".title");
+            let l = o ? o.textContent.trim() : "";
+            let c = e.querySelector(".info.d-flex.flex-wrap.align-items-center.svelte-1i1uol");
+            let s = c ? c.textContent.trim().replace(/\\s+/g, " ") : "";
+            s.includes(l) && (s = s.replace(l, "").trim());
+            
+            let d = e.querySelector(".font-size-2.statement-container.svelte-18f2a5m");
+            let i = d ? d.innerHTML.trim().replace(/\\n/g, " ") : "";
+            let u = Array.from(e.querySelectorAll(".d-block.font-size-1")).map(e => e.outerHTML.trim()).join(" ");
+            let b = Array.from(e.querySelectorAll(".question-commentary-text.font-size-2")).map(e => e.outerHTML.trim()).join(" ") + u;
+            b = b.replace('<div class="question-commentary-text font-size-2">', '<div class="question-commentary-text font-size-2"><p>------------</p>');
+            
+            let h = e.querySelector(".question-commentary-text.font-size-2");
+            let x = "";
+            if (h) {{
+                let e_html = h.outerHTML.trim();
+                x = `<node MAX_WIDTH="40 cm"><richcontent TYPE="NODE"><html><head></head><body>${{e_html}}</body></html></richcontent></node>`;
+            }}
+            
+            let y = "E" === n ? ' style="background-color: #ffcccc;"' : "";
+            let v = [t, n, l, s].filter(Boolean).join(" | ");
+            let q = `<span${{y}}>${{v}}</span><br>${{i}}`;
+            let k = e.querySelector(".badge.badge-secondary.text-light.py-1.px-1.ml-2.font-size-1");
+            k = k ? k.outerHTML.trim() : "";
+            
+            let N = Array.from(e.querySelectorAll(".text.px-3.font-size-2.svelte-1tiqrp1")).map(e => e.outerHTML.replace('<div class="text px-3.font-size-2 svelte-1tiqrp1">', '<div class="text px-3 font-size-2 svelte-1tiqrp1">&#9830 ')).join("");
+            
+            if (q.trim() !== "") {{
+                let node = `<node MAX_WIDTH="40 cm"><richcontent TYPE="NODE"><html><head></head><body>${{q}}</body></html></richcontent><richcontent TYPE="NOTE" CONTENT-TYPE="xml/"><html><head></head><body>${{b}} | ${{k}}</body></html></richcontent>${{N ? `<node><richcontent TYPE="NODE"><html><head></head><body>${{N}}</body></html></richcontent></node>` : ""}}${{x}}</node>`;
+                nodes.push({{gabarito: n, conteudo: node}});
+            }}
+        }});
+        
+        // Ordena por gabarito
+        nodes.sort((a, b) => a.gabarito.localeCompare(b.gabarito));
+        
+        console.log(`Extraídos ${{nodes.length}} nódulos`);
+        return nodes;
+    }})();
+    """
+    
+    try:
+        nodes = page.evaluate(extract_all_js)
+        log_message(f"✅ Extraídos {len(nodes)} nódulos de dados!")
+        return nodes
+    except Exception as e:
+        log_message(f"❌ Erro na extração de dados: {e}", "ERROR")
+        return []
 
 def debug_page_elements(page, description=""):
     """
@@ -264,7 +331,6 @@ def main():
 
         # Lê URLs do arquivo
         urls = [u.strip() for u in Path("urls.txt").read_text().splitlines() if u.strip()]
-        gabarito_map = {}  # Opcional: {"1":"C","2":"E",...}
 
         # Cria diretório de saída
         out_dir = Path(OUTPUT_CONFIG["output_dir"])
@@ -274,8 +340,8 @@ def main():
         screenshots_dir = Path("screenshots")
         screenshots_dir.mkdir(exist_ok=True)
 
-        log_message("Iniciando scraping do QConcursos...")
-        log_message(f"Total de URLs a processar: {len(urls)}")
+        log_message("🚀 INICIANDO SCRAPING COMPLETO DO QCONCURSOS...")
+        log_message(f"📊 Total de URLs a processar: {len(urls)}")
         
         # Atualiza progresso inicial
         update_progress(0, len(urls))
@@ -300,6 +366,7 @@ def main():
 
             try:
                 # === NOVO LOGIN PADRONIZADO ===
+                log_message("🔐 INICIANDO PROCESSO DE LOGIN...", "INFO")
                 log_message("1. Navegando para a página de login...", "INFO")
                 page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
 
@@ -430,8 +497,8 @@ def main():
                 log_message("9. Aguardando redirecionamento...", "INFO")
                 try:
                     page.wait_for_url("**/app.qconcursos.com/**", timeout=60000)
-                    log_message("✓ Login realizado com sucesso!", "SUCCESS")
-                    log_message(f"URL final: {page.url}", "SUCCESS")
+                    log_message("✅ LOGIN REALIZADO COM SUCESSO!", "SUCCESS")
+                    log_message(f"🔗 URL final: {page.url}", "SUCCESS")
                 except Exception as redirect_error:
                     log_message(f"✗ Erro no redirecionamento: {redirect_error}", "ERROR")
                     log_message(f"URL atual: {page.url}", "ERROR")
@@ -481,40 +548,64 @@ def main():
             all_nodes = []
             
             # Processa cada URL
-            log_message("🚀 INICIANDO PROCESSO DE RASPAGEM DE DADOS", "SUCCESS")
+            log_message("🚀 INICIANDO PROCESSO COMPLETO DE RASPAGEM DE DADOS", "SUCCESS")
             for i, url in enumerate(urls, 1):
                 log_message(f"📄 PROCESSANDO URL {i}/{len(urls)}", "INFO")
                 log_message(f"🔗 Navegando para: {url[:80]}...", "INFO")
                 update_progress(i-1, len(urls), url)
                 
                 try:
-                    page.goto(url, wait_until="domcontentloaded")
+                    # Navega para a URL
+                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     log_message("✅ Página carregada com sucesso!", "SUCCESS")
                     
-                    # Clica nas abas necessárias
-                    log_message("🎯 Configurando abas para extração...", "INFO")
+                    # Aguarda a página estabilizar
+                    time.sleep(3)
+                    
+                    # PASSO 1: Clica na aba "Estatísticas" para extrair gabaritos
+                    log_message("📊 PASSO 1: Acessando aba de Estatísticas...")
                     click_tab(page, "Estatísticas")
+                    time.sleep(2)  # Aguarda carregar
+                    
+                    # PASSO 2: Extrai gabaritos automaticamente
+                    log_message("🎯 PASSO 2: Extraindo gabaritos automaticamente...")
+                    gabarito_map = extract_gabarito_automatico(page)
+                    
+                    # PASSO 3: Clica na aba "Comentários de alunos"
+                    log_message("💬 PASSO 3: Acessando aba de Comentários de alunos...")
                     click_tab(page, "Comentários de alunos")
-                    log_message("✅ Abas configuradas!", "SUCCESS")
+                    time.sleep(3)  # Aguarda carregar comentários
                     
-                    # Rola para carregar todo o conteúdo
-                    log_message("📜 Carregando todo o conteúdo da página...", "INFO")
-                    scroll_all(page)
-                    log_message("✅ Conteúdo carregado completamente!", "SUCCESS")
+                    # PASSO 4: Scroll completo para carregar todos os comentários
+                    log_message("📜 PASSO 4: Carregando todos os comentários (scroll completo)...")
+                    scroll_all(page, 
+                              step=SCRAPING_CONFIG["scroll_step"], 
+                              pause=SCRAPING_CONFIG["scroll_pause"], 
+                              max_iter=SCRAPING_CONFIG["scroll_max_iter"])
                     
-                    # Extrai os dados
-                    log_message("🔍 INICIANDO EXTRAÇÃO DE DADOS...", "INFO")
-                    gabarito_map = {}  # Pode ser customizado se necessário
-                    nodes = extract_nodes(page, gabarito_map)
-                    all_nodes.extend(nodes)
+                    # Aguarda um pouco mais para garantir que tudo carregou
+                    time.sleep(2)
                     
-                    log_message(f"✅ EXTRAÍDOS {len(nodes)} NÓDULOS DE DADOS!", "SUCCESS")
-                    log_message(f"📊 Total acumulado: {len(all_nodes)} nódulos", "INFO")
+                    # PASSO 5: Extração completa usando JavaScript
+                    log_message("🔍 PASSO 5: Executando extração completa de dados...")
+                    nodes = extract_all_data_with_javascript(page, gabarito_map)
+                    
+                    if nodes:
+                        all_nodes.extend(nodes)
+                        log_message(f"✅ EXTRAÍDOS {len(nodes)} NÓDULOS DE DADOS!", "SUCCESS")
+                        log_message(f"📊 Total acumulado: {len(all_nodes)} nódulos", "INFO")
+                    else:
+                        log_message("⚠️ Nenhum nódulo extraído desta URL", "WARNING")
+                    
                     update_progress(i, len(urls))
-                    time.sleep(SCRAPING_CONFIG["url_pause"])
+                    
+                    # Pausa entre URLs
+                    if i < len(urls):  # Não pausa na última URL
+                        log_message(f"⏳ Aguardando {SCRAPING_CONFIG['url_pause']}s antes da próxima URL...")
+                        time.sleep(SCRAPING_CONFIG['url_pause'])
                     
                 except Exception as e:
-                    log_message(f"Erro ao processar URL: {e}", "ERROR")
+                    log_message(f"❌ Erro ao processar URL: {e}", "ERROR")
                     
                     # Screenshot de debug se habilitado
                     if DEBUG_CONFIG["screenshot_on_error"]:
@@ -538,16 +629,25 @@ def main():
                     
                     continue
 
-            # Gera o XML
-            log_message("📋 INICIANDO FORMATAÇÃO DOS DADOS...", "INFO")
-            log_message("🔄 Construindo arquivo XML do Freeplane...", "INFO")
-            xml = build_freeplane(all_nodes)
-            output_file = out_dir / OUTPUT_CONFIG["filename"]
-            output_file.write_text(xml, encoding=OUTPUT_CONFIG["encoding"])
-            
-            log_message(f"💾 ARQUIVO SALVO: {output_file}", "SUCCESS")
-            log_message(f"🎯 PROCESSO FINALIZADO - {len(all_nodes)} NÓDULOS PROCESSADOS!", "SUCCESS")
-            log_message("🎉 RASPAGEM CONCLUÍDA COM SUCESSO!", "SUCCESS")
+            # Gera o XML Freeplane
+            if all_nodes:
+                log_message("📋 INICIANDO FORMATAÇÃO DOS DADOS...", "INFO")
+                log_message("🔄 Construindo arquivo XML do Freeplane...", "INFO")
+                
+                # Constrói o XML manualmente baseado na estrutura do bookmarklet
+                xml_content = '<map version="freeplane 1.9.8"><node LOCALIZED_TEXT="new_mindmap">'
+                for node in all_nodes:
+                    xml_content += node['conteudo']
+                xml_content += '</node></map>'
+                
+                output_file = out_dir / OUTPUT_CONFIG["filename"]
+                output_file.write_text(xml_content, encoding=OUTPUT_CONFIG["encoding"])
+                
+                log_message(f"💾 ARQUIVO SALVO: {output_file}", "SUCCESS")
+                log_message(f"🎯 PROCESSO FINALIZADO - {len(all_nodes)} NÓDULOS PROCESSADOS!", "SUCCESS")
+                log_message("🎉 RASPAGEM CONCLUÍDA COM SUCESSO!", "SUCCESS")
+            else:
+                log_message("⚠️ Nenhum dado foi extraído. Verifique as URLs e configurações.", "WARNING")
 
             browser.close()
             

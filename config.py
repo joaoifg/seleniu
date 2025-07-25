@@ -33,17 +33,17 @@ IS_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('container') == 'doc
 SCRAPING_CONFIG = {
     "headless": IS_DOCKER,      # True para Docker, False para debug local
     "timeout": 30000,           # Timeout de login em ms - aumentado para debug
-    "scroll_step": 1500,        # Pixels por rolagem
-    "scroll_pause": 0.4,        # Pausa entre rolagens
-    "scroll_max_iter": 40,      # Máximo de iterações de rolagem
-    "url_pause": 1,             # Pausa entre URLs
+    "scroll_step": 1200,        # Pixels por rolagem - reduzido para ser mais suave
+    "scroll_pause": 0.8,        # Pausa entre rolagens - aumentado para dar mais tempo
+    "scroll_max_iter": 60,      # Máximo de iterações de rolagem - aumentado para carregar tudo
+    "url_pause": 3,             # Pausa entre URLs - aumentado para estabilidade
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",  # User agent realista
 }
 
 # Configurações de output
 OUTPUT_CONFIG = {
     "output_dir": "output",
-    "filename": "qc_freeplane.xml",
+    "filename": "qc_freeplane.mm",
     "encoding": "utf-8",
     "highlight_wrong": True,    # Destacar questões erradas
     "highlight_color": "#ffcccc"  # Cor para questões erradas
