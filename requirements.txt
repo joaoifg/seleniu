@@ -1,8 +1,4 @@
-playwright
-python-dotenv
-flask
-flask-socketio
-redis
-requests
-gunicorn
-eventlet 
+Flask
+Flask-SocketIO
+selenium
+playwright 
