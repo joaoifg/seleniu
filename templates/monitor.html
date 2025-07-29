@@ -19,11 +19,28 @@
         .status.running { background: #fff3cd; color: #856404; }
         .status.completed { background: #d4edda; color: #155724; }
         .status.error { background: #f8d7da; color: #721c24; }
+        .session-info { background: #e7f3ff; color: #0c5460; padding: 10px; border-radius: 4px; margin-bottom: 20px; }
+        .session-info.valid { background: #d4edda; color: #155724; }
+        .session-info.expired { background: #f8d7da; color: #721c24; }
+        .session-info.none { background: #fff3cd; color: #856404; }
+        .button-group { display: flex; gap: 10px; margin-top: 12px; }
+        .button-group button { flex: 1; }
+        .btn-clear { background: #dc3545; }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>Automação QConcursos</h1>
+    
+    <!-- Status da Sessão -->
+    <div id="session-info" class="session-info" style="display:none;">
+        <strong>Status da Sessão:</strong> <span id="session-status">Verificando...</span>
+        <div class="button-group">
+            <button id="btn-clear-session" class="btn-clear">Limpar Sessão</button>
+            <button id="btn-check-session">Verificar Sessão</button>
+        </div>
+    </div>
+    
     <form id="scrape-form">
         <label for="email">E-mail</label>
         <input type="email" id="email" name="email" placeholder="Seu e-mail" required>
@@ -44,7 +61,60 @@
     const btnLog = document.getElementById('btn-log');
     const logDiv = document.getElementById('log');
     const statusDiv = document.getElementById('status');
+    const sessionInfo = document.getElementById('session-info');
+    const sessionStatus = document.getElementById('session-status');
+    const btnClearSession = document.getElementById('btn-clear-session');
+    const btnCheckSession = document.getElementById('btn-check-session');
     let statusCheckInterval;
+
+    // Verificar status da sessão ao carregar a página
+    window.onload = function() {
+        checkSessionStatus();
+    };
+
+    async function checkSessionStatus() {
+        try {
+            const res = await fetch('/session_status');
+            const data = await res.json();
+            
+            sessionInfo.style.display = 'block';
+            
+            if (data.session_valid) {
+                sessionStatus.textContent = '✅ Sessão válida - Login não necessário!';
+                sessionInfo.className = 'session-info valid';
+            } else if (data.session_exists) {
+                sessionStatus.textContent = '⚠️ Sessão expirada - Login necessário';
+                sessionInfo.className = 'session-info expired';
+            } else {
+                sessionStatus.textContent = '❌ Nenhuma sessão - Login necessário';
+                sessionInfo.className = 'session-info none';
+            }
+        } catch (error) {
+            sessionInfo.style.display = 'block';
+            sessionStatus.textContent = '❌ Erro ao verificar sessão';
+            sessionInfo.className = 'session-info error';
+        }
+    }
+
+    btnCheckSession.onclick = checkSessionStatus;
+
+    btnClearSession.onclick = async () => {
+        if (confirm('Tem certeza que deseja limpar a sessão? Você precisará fazer login novamente.')) {
+            try {
+                const res = await fetch('/clear_session');
+                const data = await res.json();
+                
+                if (data.success) {
+                    alert('Sessão limpa com sucesso!');
+                    checkSessionStatus();
+                } else {
+                    alert('Erro ao limpar sessão: ' + data.error);
+                }
+            } catch (error) {
+                alert('Erro ao limpar sessão: ' + error.message);
+            }
+        }
+    };
 
     form.onsubmit = async (e) => {
         e.preventDefault();
@@ -87,6 +157,8 @@
                     statusDiv.textContent = 'Automação finalizada com sucesso!';
                     statusDiv.className = 'status completed';
                     btnDownload.style.display = 'block';
+                    // Atualizar status da sessão após conclusão
+                    checkSessionStatus();
                 } else if (status.error) {
                     clearInterval(statusCheckInterval);
                     statusDiv.textContent = 'Erro: ' + status.error;
